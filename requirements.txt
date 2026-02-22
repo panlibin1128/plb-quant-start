@@ -1,0 +1,7 @@
+akshare
+pandas
+numpy
+tqdm
+pyarrow
+matplotlib
+pyyaml

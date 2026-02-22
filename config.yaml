@@ -1,0 +1,46 @@
+run:
+  date: today
+  min_turnover: 300000000
+  top_n_per_industry: 3
+  strict_market_universe_limit: 1200
+
+enable_reversal_system: true
+reversal_universe_mode: industry_top3
+reversal_rps_mode: fast_proxy
+reversal_params:
+  rps50_threshold: 85
+  near_120d_high_threshold: 0.9
+  near_250d_high_ratio: 0.8
+
+market_filter:
+  symbol: sh000300
+  use_close_gt_ma250: true
+  use_ma20_gt_ma60: true
+
+industry_strength:
+  mode: auto
+  use_close_gt_ma120: true
+  use_excess_60d_positive: true
+
+trend:
+  hhv_ratio_threshold: 0.75
+  rps_sum_threshold: 165
+
+rps:
+  mode: fast_proxy
+
+risk:
+  reduce_on_close_below_ma20_days: 2
+  exit_on_close_below_ma60: true
+  exit_on_drawdown: 0.12
+  take_profit_protect_half: false
+
+io:
+  cache_dir: data_cache
+  output_dir: outputs
+  log_dir: logs
+
+fetch:
+  max_retries: 3
+  retry_sleep_seconds: 1.5
+  request_sleep_seconds: 0.2

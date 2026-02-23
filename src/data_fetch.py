@@ -67,10 +67,13 @@ def _normalize_spot_columns(df: pd.DataFrame) -> pd.DataFrame:
         "成交额(元)": "turnover",
         "行业": "industry",
         "所属行业": "industry",
+        "市盈率-动态": "pe",
+        "市净率": "pb",
+        "股息率": "dividend_yield",
     }
     matched = {k: v for k, v in rename_map.items() if k in df.columns}
     out = df.rename(columns=matched).copy()
-    for key in ["symbol", "name", "total_mv", "turnover"]:
+    for key in ["symbol", "name", "total_mv", "turnover", "pe", "pb", "dividend_yield"]:
         if key not in out.columns:
             out[key] = pd.NA
     if "industry" not in out.columns:
@@ -80,7 +83,11 @@ def _normalize_spot_columns(df: pd.DataFrame) -> pd.DataFrame:
     out["is_st"] = out["name"].str.contains("ST", case=False, na=False)
     out["total_mv"] = pd.to_numeric(out["total_mv"], errors="coerce")
     out["turnover"] = pd.to_numeric(out["turnover"], errors="coerce")
-    return out.loc[:, ["symbol", "name", "industry", "total_mv", "turnover", "is_st"]].copy()
+    out["pe"] = pd.to_numeric(out["pe"], errors="coerce")
+    out["pb"] = pd.to_numeric(out["pb"], errors="coerce")
+    out["dividend_yield"] = pd.to_numeric(out["dividend_yield"], errors="coerce")
+    out["dividend_yield"] = out["dividend_yield"] / 100.0
+    return out.loc[:, ["symbol", "name", "industry", "total_mv", "turnover", "pe", "pb", "dividend_yield", "is_st"]].copy()
 
 
 def fetch_spot(cfg: FetchConfig, logger: logging.Logger) -> pd.DataFrame:
@@ -153,6 +160,22 @@ def fetch_industry_board_hist(industry_name: str, cfg: FetchConfig, logger: logg
     _ensure_parent(cache)
     df.to_parquet(cache, index=False)
     return df
+
+
+def fetch_stock_financial_abstract(symbol: str, cfg: FetchConfig, logger: logging.Logger) -> pd.DataFrame:
+    symbol6 = str(symbol).zfill(6)
+    cache = cfg.cache_dir / "fundamentals" / f"{symbol6}.parquet"
+    if cache.exists():
+        cached = cast(pd.DataFrame, pd.read_parquet(cache))
+        return cached
+
+    def _call() -> pd.DataFrame:
+        return ak.stock_financial_abstract(symbol=symbol6)
+
+    raw = _retry_call(_call, cfg, logger)
+    _ensure_parent(cache)
+    raw.to_parquet(cache, index=False)
+    return raw
 
 
 def load_industry_map(industry_csv: Optional[Path]) -> pd.DataFrame:

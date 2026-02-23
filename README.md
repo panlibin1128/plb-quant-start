@@ -1,4 +1,4 @@
-# A-Share Industry Top3 + Trend + Reversal Screener
+# A-Share Industry Top3 + Trend/Reversal/Score/Value Screener
 
 This project implements a daily A-share stock screener with the fixed workflow:
 
@@ -7,7 +7,9 @@ This project implements a daily A-share stock screener with the fixed workflow:
 3. Top-3 leaders per industry (by total market cap)
 4. Trend train-track rules
 5. Monthly reversal 5.0 rules (parallel subsystem)
-6. Risk exit flags
+6. Score ranking subsystem
+7. Value subsystem with conservative degrade levels
+8. Risk exit flags
 
 Data source is AkShare, with local cache and retry logic for stability.
 
@@ -44,6 +46,16 @@ python -m src.main --date today --system value
 python -m src.main --date today --system both
 ```
 
+Recommended daily workflow (fixed):
+
+```bash
+# 1) run all four strategies
+python -m src.main --date today --config config.value_v1.yaml --system both
+
+# 2) generate simple publish table (company + selected strategies)
+python -m src.publish_table --date today --output-dir outputs
+```
+
 Value presets:
 
 ```bash
@@ -53,6 +65,17 @@ python -m src.main --date today --config config.value_v2.yaml --system value
 
 - `config.value_v1.yaml`: conservative value preset (V1)
 - `config.value_v2.yaml`: more aggressive value preset (V2)
+
+Generate one simplified publish table (company + selected strategies):
+
+```bash
+python -m src.publish_table --date today --output-dir outputs
+```
+
+This writes:
+
+- `outputs/YYYY-MM-DD_4systems_publish_simple.csv`
+- `outputs/YYYY-MM-DD_4systems_publish_simple.md`
 
 Validated snapshot (2026-02-23, same market/cache context):
 
@@ -78,17 +101,25 @@ python -m src.main --date today --industry-map industry_map.csv
 
 ## 4) Output files
 
-- `outputs/YYYY-MM-DD_trend_candidates.csv` (trend positive-only)
+- `outputs/YYYY-MM-DD_trend_candidates.csv` (trend positive-only, unique symbols)
 - `outputs/YYYY-MM-DD_trend_summary.json`
-- `outputs/YYYY-MM-DD_reversal_candidates.csv` (reversal positive-only)
+- `outputs/YYYY-MM-DD_reversal_candidates.csv` (reversal positive-only, unique symbols)
 - `outputs/YYYY-MM-DD_reversal_summary.json`
-- `outputs/YYYY-MM-DD_score_candidates.csv`
+- `outputs/YYYY-MM-DD_score_candidates.csv` (top-N unique symbols)
 - `outputs/YYYY-MM-DD_score_summary.json`
-- `outputs/YYYY-MM-DD_value_candidates.csv`
+- `outputs/YYYY-MM-DD_value_candidates.csv` (top-N unique symbols)
 - `outputs/YYYY-MM-DD_value_summary.json`
+- `outputs/YYYY-MM-DD_4systems_publish_simple.csv` (symbol/name/industry/picked_by)
+- `outputs/YYYY-MM-DD_4systems_publish_simple.md`
 - `logs/run.log`
 
 Note: legacy combined files `YYYY-MM-DD_candidates.csv` and `YYYY-MM-DD_summary.json` are no longer written.
+
+Fixed output contract:
+
+- One stock one row (`symbol` unique) in all strategy candidate files
+- Trend/Reversal files keep only positive signals (`final_signal=true` / `reversal_signal=true`)
+- If one stock maps to multiple industries, `industry_tags` keeps merged tags for traceability
 
 ## 5) Key config (`config.yaml`)
 
@@ -169,8 +200,12 @@ Reversal output columns:
 - `reversal_D__rps50_gt_85`
 - `reversal_AA__days_above_ma250_in_30d`
 - `reversal_AB__high_near_120d_high`
-- `trend_signal`
-- `signal_label` (`NONE`, `TREND_ONLY`, `REVERSAL_ONLY`, `BOTH`)
+
+Trend/Reversal summary key fields:
+
+- Trend: `final_signals_raw` (pre-unique count), `final_signals` (unique symbol count)
+- Reversal: `reversal_signals_raw` (pre-unique count), `reversal_signals` (unique symbol count)
+- `signal_label_counts` uses unique-symbol denominator
 
 Switch to strict RPS:
 
@@ -204,12 +239,15 @@ run:
 
 - Detailed Chinese runbook (logic + next-run commands):
   - `docs/运行手册-双系统.md`
+- WeChat first-issue long-form article draft:
+  - `docs/公众号推送-四策略去重与实盘框架-2026-02-23.md`
 
 ## 8) Current Stable Baselines
 
 - Trend/Reversal/Score existing behavior remains unchanged by value presets.
 - Value V1 (`config.value_v1.yaml`) is the accepted conservative baseline.
 - Value V2 (`config.value_v2.yaml`) is the accepted more-aggressive baseline.
+- Four-strategy simplified publish table is fixed by `src.publish_table`.
 - Value outputs include explicit fallback traceability columns:
   - `degrade_level`
   - `missing_fields`

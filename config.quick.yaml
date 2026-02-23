@@ -1,6 +1,6 @@
 run:
   date: today
-  min_turnover: 999999999999
+  min_turnover: 300000000
   top_n_per_industry: 3
   strict_market_universe_limit: 500
 
@@ -20,6 +20,54 @@ trend:
 
 rps:
   mode: fast_proxy
+
+score:
+  top_n_output: 30
+  slope_lookback: 10
+  structure_lookback: 60
+  swing_order: 4
+  breakout_check_window: 20
+  breakout_high_lookback: 60
+  volume_sma_window: 20
+  breakout_volume_mult: 1.5
+  pullback_trigger_ratio: 0.95
+  pullback_drawdown_limit: 0.20
+  rs_long_window: 63
+  rs_short_window: 21
+  risk_churn_vol_mult: 2.5
+  risk_breakdown_vol_mult: 1.5
+  risk_window: 5
+  strength_full_score_percentile: 80
+  pullback_near_high_ratio: 0.985
+  pullback_overextension_ratio: 0.18
+  enable_extension_filter: true
+  extension_ratio_threshold: 1.25
+  extension_pullback_penalty: 5
+
+value:
+  industry_whitelist:
+    - 有色金属
+    - 煤炭
+    - 石油石化
+    - 化工
+    - 农业
+    - 银行
+    - 电力
+  exclude_high_pe: true
+  max_pe: 30
+  min_dividend_yield: 0.03
+  max_pb: 3
+  min_roe: 0.10
+  min_operating_cf_ratio: 0.8
+  top_n_output: 30
+  degrade_level1_enabled: false
+  degrade_level2_on_empty: false
+  roe_proxy_max_pe: 80
+  ocf_debt_ratio_guard: 0.60
+  dividend_missing_level1_max_pe: 20
+  dividend_missing_level1_max_pb: 2.0
+  dividend_missing_level2_max_pe: 15
+  dividend_missing_level2_max_pb: 1.8
 
 risk:
   reduce_on_close_below_ma20_days: 2

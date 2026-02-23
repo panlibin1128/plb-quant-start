@@ -2,15 +2,7 @@ run:
   date: today
   min_turnover: 300000000
   top_n_per_industry: 3
-  strict_market_universe_limit: 1200
-
-enable_reversal_system: true
-reversal_universe_mode: industry_top3
-reversal_rps_mode: fast_proxy
-reversal_params:
-  rps50_threshold: 85
-  near_120d_high_threshold: 0.9
-  near_250d_high_ratio: 0.8
+  strict_market_universe_limit: 500
 
 market_filter:
   symbol: sh000300
@@ -23,8 +15,8 @@ industry_strength:
   use_excess_60d_positive: true
 
 trend:
-  hhv_ratio_threshold: 0.75
-  rps_sum_threshold: 165
+  hhv_ratio_threshold: 0.8
+  rps_sum_threshold: 185
 
 rps:
   mode: fast_proxy
@@ -68,8 +60,8 @@ value:
   min_roe: 0.10
   min_operating_cf_ratio: 0.8
   top_n_output: 30
-  degrade_level1_enabled: false
-  degrade_level2_on_empty: false
+  degrade_level1_enabled: true
+  degrade_level2_on_empty: true
   roe_proxy_max_pe: 80
   ocf_debt_ratio_guard: 0.60
   dividend_missing_level1_max_pe: 20
@@ -89,6 +81,6 @@ io:
   log_dir: logs
 
 fetch:
-  max_retries: 3
-  retry_sleep_seconds: 1.5
-  request_sleep_seconds: 0.2
+  max_retries: 2
+  retry_sleep_seconds: 1.0
+  request_sleep_seconds: 0.1

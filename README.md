@@ -78,13 +78,17 @@ python -m src.main --date today --industry-map industry_map.csv
 
 ## 4) Output files
 
-- `outputs/YYYY-MM-DD_candidates.csv`
-- `outputs/YYYY-MM-DD_summary.json`
+- `outputs/YYYY-MM-DD_trend_candidates.csv` (trend positive-only)
+- `outputs/YYYY-MM-DD_trend_summary.json`
+- `outputs/YYYY-MM-DD_reversal_candidates.csv` (reversal positive-only)
+- `outputs/YYYY-MM-DD_reversal_summary.json`
 - `outputs/YYYY-MM-DD_score_candidates.csv`
 - `outputs/YYYY-MM-DD_score_summary.json`
 - `outputs/YYYY-MM-DD_value_candidates.csv`
 - `outputs/YYYY-MM-DD_value_summary.json`
 - `logs/run.log`
+
+Note: legacy combined files `YYYY-MM-DD_candidates.csv` and `YYYY-MM-DD_summary.json` are no longer written.
 
 ## 5) Key config (`config.yaml`)
 

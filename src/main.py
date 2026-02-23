@@ -17,6 +17,7 @@ from .data_fetch import (
     build_industry_map_from_boards,
     fetch_hs300_daily,
     fetch_industry_board_hist,
+    fetch_stock_financial_abstract,
     fetch_spot,
     fetch_stock_daily,
     load_industry_map,
@@ -32,6 +33,8 @@ from .filters import (
     trend_train_track_flags,
 )
 from .reversal_system import ReversalParams, evaluate_reversal_stock, signal_label
+from .score_system import DictDataProvider, ScoreConfig, run_score, score_output_columns
+from .value_system import AkValueDataProvider, ValueConfig, run_value, value_output_columns
 from .rps import (
     compute_fast_proxy_rps,
     compute_fast_proxy_rps50,
@@ -61,7 +64,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--config", default="config.yaml")
     p.add_argument("--industry-map", default="", help="Optional CSV with columns: industry,symbol")
     p.add_argument("--self-check", action="store_true", help="Fetch HS300 and compute MAs")
-    p.add_argument("--system", choices=["trend", "reversal", "both"], default="both")
+    p.add_argument("--system", choices=["trend", "reversal", "both", "score", "value"], default="both")
     return p.parse_args()
 
 
@@ -99,6 +102,28 @@ def _write_outputs(result_df: pd.DataFrame, summary_obj: Dict[str, object], outp
     result_df.to_csv(out_csv, index=False, encoding="utf-8-sig")
     out_json.write_text(json.dumps(summary_obj, ensure_ascii=False, indent=2), encoding="utf-8")
     logger.info("done: %s | %s", out_csv, out_json)
+
+
+def _write_score_outputs(result_df: pd.DataFrame, summary_obj: Dict[str, object], output_dir: Path, run_date: str, logger: logging.Logger) -> None:
+    out_csv = output_dir / f"{run_date}_score_candidates.csv"
+    out_json = output_dir / f"{run_date}_score_summary.json"
+    out_df = result_df
+    if out_df.empty and len(out_df.columns) == 0:
+        out_df = pd.DataFrame(columns=score_output_columns())
+    out_df.to_csv(out_csv, index=False, encoding="utf-8-sig")
+    out_json.write_text(json.dumps(summary_obj, ensure_ascii=False, indent=2), encoding="utf-8")
+    logger.info("score done: %s | %s", out_csv, out_json)
+
+
+def _write_value_outputs(result_df: pd.DataFrame, summary_obj: Dict[str, object], output_dir: Path, run_date: str, logger: logging.Logger) -> None:
+    out_csv = output_dir / f"{run_date}_value_candidates.csv"
+    out_json = output_dir / f"{run_date}_value_summary.json"
+    out_df = result_df
+    if out_df.empty and len(out_df.columns) == 0:
+        out_df = pd.DataFrame(columns=value_output_columns())
+    out_df.to_csv(out_csv, index=False, encoding="utf-8-sig")
+    out_json.write_text(json.dumps(summary_obj, ensure_ascii=False, indent=2), encoding="utf-8")
+    logger.info("value done: %s | %s", out_csv, out_json)
 
 
 def _load_reversal_rps50_strict(
@@ -147,11 +172,58 @@ def main() -> int:
     cfg.setdefault("reversal_universe_mode", "industry_top3")
     cfg.setdefault("reversal_rps_mode", "fast_proxy")
     cfg.setdefault(
+        "score",
+        {
+            "top_n_output": 30,
+            "slope_lookback": 10,
+            "structure_lookback": 60,
+            "swing_order": 4,
+            "breakout_check_window": 20,
+            "breakout_high_lookback": 60,
+            "volume_sma_window": 20,
+            "breakout_volume_mult": 1.5,
+            "pullback_trigger_ratio": 0.95,
+            "pullback_drawdown_limit": 0.20,
+            "rs_long_window": 63,
+            "rs_short_window": 21,
+            "risk_churn_vol_mult": 2.5,
+            "risk_breakdown_vol_mult": 1.5,
+            "risk_window": 5,
+            "strength_full_score_percentile": 80,
+            "pullback_near_high_ratio": 0.985,
+            "pullback_overextension_ratio": 0.18,
+            "enable_extension_filter": True,
+            "extension_ratio_threshold": 1.25,
+            "extension_pullback_penalty": 5,
+        },
+    )
+    cfg.setdefault(
         "reversal_params",
         {
             "rps50_threshold": 85,
             "near_120d_high_threshold": 0.9,
             "near_250d_high_ratio": 0.8,
+        },
+    )
+    cfg.setdefault(
+        "value",
+        {
+            "industry_whitelist": ["有色金属", "煤炭", "石油石化", "化工", "农业", "银行", "电力"],
+            "exclude_high_pe": True,
+            "max_pe": 30,
+            "min_dividend_yield": 0.03,
+            "max_pb": 3,
+            "min_roe": 0.10,
+            "min_operating_cf_ratio": 0.8,
+            "top_n_output": 30,
+            "degrade_level1_enabled": False,
+            "degrade_level2_on_empty": False,
+            "roe_proxy_max_pe": 80,
+            "ocf_debt_ratio_guard": 0.60,
+            "dividend_missing_level1_max_pe": 20,
+            "dividend_missing_level1_max_pb": 2.0,
+            "dividend_missing_level2_max_pe": 15,
+            "dividend_missing_level2_max_pb": 1.8,
         },
     )
 
@@ -185,6 +257,49 @@ def main() -> int:
         exit_on_drawdown=float(cfg["risk"]["exit_on_drawdown"]),
         take_profit_protect_half=bool(cfg["risk"]["take_profit_protect_half"]),
     )
+    score_map = cfg.get("score", {})
+    score_cfg = ScoreConfig(
+        top_n_output=int(score_map.get("top_n_output", 30)),
+        slope_lookback=int(score_map.get("slope_lookback", 10)),
+        structure_lookback=int(score_map.get("structure_lookback", 60)),
+        swing_order=int(score_map.get("swing_order", 4)),
+        breakout_check_window=int(score_map.get("breakout_check_window", 20)),
+        breakout_high_lookback=int(score_map.get("breakout_high_lookback", 60)),
+        volume_sma_window=int(score_map.get("volume_sma_window", 20)),
+        breakout_volume_mult=float(score_map.get("breakout_volume_mult", 1.5)),
+        pullback_trigger_ratio=float(score_map.get("pullback_trigger_ratio", 0.95)),
+        pullback_drawdown_limit=float(score_map.get("pullback_drawdown_limit", 0.20)),
+        rs_long_window=int(score_map.get("rs_long_window", 63)),
+        rs_short_window=int(score_map.get("rs_short_window", 21)),
+        risk_churn_vol_mult=float(score_map.get("risk_churn_vol_mult", 2.5)),
+        risk_breakdown_vol_mult=float(score_map.get("risk_breakdown_vol_mult", 1.5)),
+        risk_window=int(score_map.get("risk_window", 5)),
+        strength_full_score_percentile=float(score_map.get("strength_full_score_percentile", 80)),
+        pullback_near_high_ratio=float(score_map.get("pullback_near_high_ratio", 0.985)),
+        pullback_overextension_ratio=float(score_map.get("pullback_overextension_ratio", 0.18)),
+        enable_extension_filter=bool(score_map.get("enable_extension_filter", True)),
+        extension_ratio_threshold=float(score_map.get("extension_ratio_threshold", 1.25)),
+        extension_pullback_penalty=float(score_map.get("extension_pullback_penalty", 5)),
+    )
+    value_map = cfg.get("value", {})
+    value_cfg = ValueConfig(
+        industry_whitelist=list(value_map.get("industry_whitelist", ["有色金属", "煤炭", "石油石化", "化工", "农业", "银行", "电力"])),
+        exclude_high_pe=bool(value_map.get("exclude_high_pe", True)),
+        max_pe=float(value_map.get("max_pe", 30)),
+        min_dividend_yield=float(value_map.get("min_dividend_yield", 0.03)),
+        max_pb=float(value_map.get("max_pb", 3)),
+        min_roe=float(value_map.get("min_roe", 0.10)),
+        min_operating_cf_ratio=float(value_map.get("min_operating_cf_ratio", 0.8)),
+        top_n_output=int(value_map.get("top_n_output", 30)),
+        degrade_level1_enabled=bool(value_map.get("degrade_level1_enabled", False)),
+        degrade_level2_on_empty=bool(value_map.get("degrade_level2_on_empty", False)),
+        roe_proxy_max_pe=float(value_map.get("roe_proxy_max_pe", 80)),
+        ocf_debt_ratio_guard=float(value_map.get("ocf_debt_ratio_guard", 0.60)),
+        dividend_missing_level1_max_pe=float(value_map.get("dividend_missing_level1_max_pe", 20)),
+        dividend_missing_level1_max_pb=float(value_map.get("dividend_missing_level1_max_pb", 2.0)),
+        dividend_missing_level2_max_pe=float(value_map.get("dividend_missing_level2_max_pe", 15)),
+        dividend_missing_level2_max_pb=float(value_map.get("dividend_missing_level2_max_pb", 1.8)),
+    )
 
     logger.info("step1: fetch hs300")
     hs300 = fetch_hs300_daily(fetch_cfg, logger)
@@ -196,10 +311,63 @@ def main() -> int:
         "market_flags": market_flags,
         "system_mode": args.system,
     }
+    score_summary: Dict[str, object] = {
+        "run_date": run_date,
+        "system_mode": args.system,
+        "market_regime_pass": market_ok,
+        "market_flags": market_flags,
+    }
+    value_summary: Dict[str, object] = {
+        "run_date": run_date,
+        "system_mode": args.system,
+        "market_regime_pass": market_ok,
+        "market_flags": market_flags,
+    }
+
+    def _write_score_empty(message: str, universe_df: pd.DataFrame, stock_hist_for_score: Dict[str, pd.DataFrame] | None = None) -> None:
+        provider = DictDataProvider(stock_hist=stock_hist_for_score or {}, benchmark_hist=hs300)
+        empty_universe = universe_df.copy()
+        if empty_universe.empty and len(empty_universe.columns) == 0:
+            empty_universe = pd.DataFrame(columns=["symbol", "name", "industry"])
+        _, runtime_summary = run_score(
+            date=run_date,
+            universe=empty_universe,
+            data_provider=provider,
+            config=score_cfg,
+            logger=logger,
+            risk_config=risk_cfg,
+        )
+        runtime_summary.update(score_summary)
+        runtime_summary["message"] = message
+        _write_score_outputs(pd.DataFrame(columns=score_output_columns()), runtime_summary, output_dir, run_date, logger)
+
+    def _write_value_empty(message: str, universe_df: pd.DataFrame, spot_df_for_value: pd.DataFrame) -> None:
+        empty_universe = universe_df.copy()
+        if empty_universe.empty and len(empty_universe.columns) == 0:
+            empty_universe = pd.DataFrame(columns=["symbol", "name", "industry", "close"])
+        provider = AkValueDataProvider(
+            spot_df=spot_df_for_value,
+            fetch_financial_abstract=lambda s: fetch_stock_financial_abstract(s, fetch_cfg, logger),
+        )
+        _, runtime_summary = run_value(
+            date=run_date,
+            universe=empty_universe,
+            data_provider=provider,
+            config=value_cfg,
+            logger=logger,
+        )
+        runtime_summary.update(value_summary)
+        runtime_summary["message"] = message
+        _write_value_outputs(pd.DataFrame(columns=value_output_columns()), runtime_summary, output_dir, run_date, logger)
 
     if not market_ok:
         summary["message"] = "market regime filter failed, no candidates"
-        _write_outputs(pd.DataFrame(), summary, output_dir, run_date, logger)
+        if args.system in {"trend", "reversal", "both"}:
+            _write_outputs(pd.DataFrame(), summary, output_dir, run_date, logger)
+        if args.system in {"score", "both"}:
+            _write_score_empty("market regime filter failed, no candidates", pd.DataFrame())
+        if args.system in {"value", "both"}:
+            _write_value_empty("market regime filter failed, no candidates", pd.DataFrame(), pd.DataFrame())
         return 0
 
     logger.info("step2: fetch spot list")
@@ -215,14 +383,23 @@ def main() -> int:
         spot = spot.drop(columns=["industry"]).merge(user_map, on="symbol", how="left")
 
     summary["spot_count"] = int(len(spot))
+    score_summary["spot_count"] = int(len(spot))
+    value_summary["spot_count"] = int(len(spot))
 
     min_turnover = float(cfg["run"]["min_turnover"])
     top_n = int(cfg["run"]["top_n_per_industry"])
     top3 = top_n_per_industry(spot, top_n, min_turnover)
     summary["after_top_n"] = int(len(top3))
+    score_summary["input_universe_count"] = int(len(top3))
+    value_summary["input_universe_count"] = int(len(top3))
     if top3.empty:
         summary["message"] = "no symbols left after top-n industry filter"
-        _write_outputs(pd.DataFrame(), summary, output_dir, run_date, logger)
+        if args.system in {"trend", "reversal", "both"}:
+            _write_outputs(pd.DataFrame(), summary, output_dir, run_date, logger)
+        if args.system in {"score", "both"}:
+            _write_score_empty("no symbols left after top-n industry filter", top3)
+        if args.system in {"value", "both"}:
+            _write_value_empty("no symbols left after top-n industry filter", top3, spot)
         return 0
 
     logger.info("step3: fetch stock history for top candidates")
@@ -236,15 +413,23 @@ def main() -> int:
     avail_symbols = set(stock_hist.keys())
     top3 = top3[top3["symbol"].isin(avail_symbols)].copy()
     summary["after_history_available"] = int(len(top3))
+    score_summary["after_history_available"] = int(len(top3))
+    value_summary["after_history_available"] = int(len(top3))
     if top3.empty:
         summary["message"] = "no symbols left after history fetch"
-        _write_outputs(pd.DataFrame(), summary, output_dir, run_date, logger)
+        if args.system in {"trend", "reversal", "both"}:
+            _write_outputs(pd.DataFrame(), summary, output_dir, run_date, logger)
+        if args.system in {"score", "both"}:
+            _write_score_empty("no symbols left after history fetch", top3, stock_hist)
+        if args.system in {"value", "both"}:
+            _write_value_empty("no symbols left after history fetch", top3, spot)
         return 0
 
     top3_for_reversal = top3.copy()
+    top3_for_value = top3.copy()
 
     trend_result = pd.DataFrame()
-    if args.system in {"trend", "both"}:
+    if args.system in {"trend", "both", "score"}:
         logger.info("step4: industry strength")
         ind_mode = str(cfg["industry_strength"].get("mode", "auto"))
         ind_strength = pd.DataFrame()
@@ -270,57 +455,66 @@ def main() -> int:
         strong_inds = set(ind_strength[ind_strength["industry_strength_pass"]]["industry"].tolist())
         top3 = top3[top3["industry"].isin(strong_inds)].copy()
         summary["after_industry_strength"] = int(len(top3))
+        score_summary["after_industry_strength"] = int(len(top3))
         if top3.empty:
             summary["message"] = "no symbols left after industry strength filter"
-            _write_outputs(pd.DataFrame(), summary, output_dir, run_date, logger)
+            if args.system in {"trend", "reversal", "both"}:
+                _write_outputs(pd.DataFrame(), summary, output_dir, run_date, logger)
+            if args.system in {"score", "both"}:
+                _write_score_empty("no symbols left after industry strength filter", top3, stock_hist)
+            if args.system in {"value", "both"}:
+                _write_value_empty("no symbols left after industry strength filter", top3_for_value, spot)
             return 0
 
-        logger.info("step5: compute RPS")
-        hs300_ret120 = _ret_n(hs300["close"], 120)
-        hs300_ret250 = _ret_n(hs300["close"], 250)
-        latest_ret_rows = []
-        for symbol in top3["symbol"].tolist():
-            close = stock_hist[symbol]["close"]
-            latest_ret_rows.append({"symbol": symbol, "ret120": _ret_n(close, 120), "ret250": _ret_n(close, 250)})
-        latest_returns = pd.DataFrame(latest_ret_rows)
+        if args.system in {"trend", "both"}:
+            logger.info("step5: compute RPS")
+            hs300_ret120 = _ret_n(hs300["close"], 120)
+            hs300_ret250 = _ret_n(hs300["close"], 250)
+            latest_ret_rows = []
+            for symbol in top3["symbol"].tolist():
+                close = stock_hist[symbol]["close"]
+                latest_ret_rows.append({"symbol": symbol, "ret120": _ret_n(close, 120), "ret250": _ret_n(close, 250)})
+            latest_returns = pd.DataFrame(latest_ret_rows)
 
-        rps_mode = cfg["rps"]["mode"]
-        if rps_mode == "strict_market":
-            universe_limit = int(cfg["run"].get("strict_market_universe_limit", 1200))
-            universe = spot.sort_values("total_mv", ascending=False).head(universe_limit)
-            universe_map: Dict[str, pd.Series] = {}
-            for symbol in tqdm(universe["symbol"].tolist(), desc="strict rps universe", unit="stock"):
-                try:
-                    universe_map[symbol] = fetch_stock_daily(symbol, fetch_cfg, logger)["close"]
-                except Exception:
-                    continue
-            strict_df = compute_strict_market_rps_latest_day(universe_map)
-            rps_df = latest_returns[["symbol"]].merge(strict_df, on="symbol", how="left")
-            summary["rps_mode"] = "strict_market"
-            summary["strict_universe_size"] = int(len(universe_map))
+            rps_mode = cfg["rps"]["mode"]
+            if rps_mode == "strict_market":
+                universe_limit = int(cfg["run"].get("strict_market_universe_limit", 1200))
+                universe = spot.sort_values("total_mv", ascending=False).head(universe_limit)
+                universe_map: Dict[str, pd.Series] = {}
+                for symbol in tqdm(universe["symbol"].tolist(), desc="strict rps universe", unit="stock"):
+                    try:
+                        universe_map[symbol] = fetch_stock_daily(symbol, fetch_cfg, logger)["close"]
+                    except Exception:
+                        continue
+                strict_df = compute_strict_market_rps_latest_day(universe_map)
+                rps_df = latest_returns[["symbol"]].merge(strict_df, on="symbol", how="left")
+                summary["rps_mode"] = "strict_market"
+                summary["strict_universe_size"] = int(len(universe_map))
+            else:
+                proxy = compute_fast_proxy_rps(latest_returns, hs300_ret120, hs300_ret250)
+                rps_df = latest_returns[["symbol"]].copy()
+                rps_df["rps120"] = proxy.rps120.values
+                rps_df["rps250"] = proxy.rps250.values
+                summary["rps_mode"] = "fast_proxy"
+
+            top3 = top3.merge(rps_df, on="symbol", how="left")
+
+            logger.info("step6: trend core + risk flags")
+            result_rows = []
+            for _, row in tqdm(top3.iterrows(), total=len(top3), desc="evaluate trend", unit="stock"):
+                symbol = row["symbol"]
+                hist = stock_hist[symbol]
+                trend_flags = trend_train_track_flags(hist, trend_cfg, float(row["rps120"]), float(row["rps250"]))
+                risk_flags = risk_exit_flags(hist, risk_cfg)
+                out = row.to_dict()
+                out.update(trend_flags)
+                out.update(risk_flags)
+                result_rows.append(out)
+
+            trend_result = pd.DataFrame(result_rows)
+            summary["final_signals"] = int(trend_result["final_signal"].sum()) if not trend_result.empty else 0
         else:
-            proxy = compute_fast_proxy_rps(latest_returns, hs300_ret120, hs300_ret250)
-            rps_df = latest_returns[["symbol"]].copy()
-            rps_df["rps120"] = proxy.rps120.values
-            rps_df["rps250"] = proxy.rps250.values
-            summary["rps_mode"] = "fast_proxy"
-
-        top3 = top3.merge(rps_df, on="symbol", how="left")
-
-        logger.info("step6: trend core + risk flags")
-        result_rows = []
-        for _, row in tqdm(top3.iterrows(), total=len(top3), desc="evaluate trend", unit="stock"):
-            symbol = row["symbol"]
-            hist = stock_hist[symbol]
-            trend_flags = trend_train_track_flags(hist, trend_cfg, float(row["rps120"]), float(row["rps250"]))
-            risk_flags = risk_exit_flags(hist, risk_cfg)
-            out = row.to_dict()
-            out.update(trend_flags)
-            out.update(risk_flags)
-            result_rows.append(out)
-
-        trend_result = pd.DataFrame(result_rows)
-        summary["final_signals"] = int(trend_result["final_signal"].sum()) if not trend_result.empty else 0
+            summary["final_signals"] = 0
     else:
         summary["after_industry_strength"] = 0
         summary["final_signals"] = 0
@@ -403,8 +597,49 @@ def main() -> int:
     else:
         summary["reversal_signals"] = 0
 
+    score_result = pd.DataFrame()
+    if args.system in {"score", "both"}:
+        logger.info("step8: score system")
+        provider = DictDataProvider(stock_hist=stock_hist, benchmark_hist=hs300)
+        score_result, score_runtime_summary = run_score(
+            date=run_date,
+            universe=top3,
+            data_provider=provider,
+            config=score_cfg,
+            logger=logger,
+            risk_config=risk_cfg,
+        )
+        score_summary.update(score_runtime_summary)
+
+    value_result = pd.DataFrame()
+    if args.system in {"value", "both"}:
+        logger.info("step9: value system")
+        value_provider = AkValueDataProvider(
+            spot_df=spot,
+            fetch_financial_abstract=lambda s: fetch_stock_financial_abstract(s, fetch_cfg, logger),
+        )
+        value_result, value_runtime_summary = run_value(
+            date=run_date,
+            universe=top3_for_value,
+            data_provider=value_provider,
+            config=value_cfg,
+            logger=logger,
+        )
+        value_summary.update(value_runtime_summary)
+
+    if args.system == "score":
+        _write_score_outputs(score_result, score_summary, output_dir, run_date, logger)
+        return 0
+
+    if args.system == "value":
+        _write_value_outputs(value_result, value_summary, output_dir, run_date, logger)
+        return 0
+
     if trend_result.empty and reversal_result.empty:
         _write_outputs(pd.DataFrame(), summary, output_dir, run_date, logger)
+        if args.system == "both":
+            _write_score_outputs(score_result, score_summary, output_dir, run_date, logger)
+            _write_value_outputs(value_result, value_summary, output_dir, run_date, logger)
         return 0
 
     if trend_result.empty:
@@ -472,6 +707,9 @@ def main() -> int:
     logger.info("signal_label distribution: %s", summary["signal_label_counts"])
 
     _write_outputs(result, summary, output_dir, run_date, logger)
+    if args.system == "both":
+        _write_score_outputs(score_result, score_summary, output_dir, run_date, logger)
+        _write_value_outputs(value_result, value_summary, output_dir, run_date, logger)
     return 0
 
 

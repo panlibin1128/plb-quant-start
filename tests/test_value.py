@@ -251,6 +251,40 @@ class ValueSystemTests(unittest.TestCase):
         self.assertEqual(int(out.iloc[0]["degrade_level"]), 2)
         self.assertEqual(summary.get("degrade_level_used"), 2)
 
+    def test_value_top_n_is_unique_by_symbol(self) -> None:
+        universe = pd.DataFrame(
+            {
+                "symbol": ["000001", "000001", "000002"],
+                "name": ["A", "A", "B"],
+                "industry": ["银行", "金融", "煤炭"],
+                "close": [10.0, 10.0, 20.0],
+            }
+        )
+        provider = _FakeValueProvider(
+            {
+                "000001": {
+                    "pe": 10,
+                    "pb": 1.0,
+                    "roe": 0.12,
+                    "dividend_yield": 0.05,
+                    "operating_cf_ratio": 1.0,
+                    "debt_ratio": 0.5,
+                    "net_profit_yoy": 0.1,
+                },
+                "000002": {
+                    "pe": 12,
+                    "pb": 1.2,
+                    "roe": 0.11,
+                    "dividend_yield": 0.04,
+                    "operating_cf_ratio": 1.1,
+                    "debt_ratio": 0.4,
+                    "net_profit_yoy": 0.08,
+                },
+            }
+        )
+        out, _ = run_value("2026-02-22", universe, provider, ValueConfig(top_n_output=5), logging.getLogger("test-value"))
+        self.assertEqual(out["symbol"].astype(str).nunique(), len(out))
+
     def test_empty_output_schema(self) -> None:
         universe = pd.DataFrame(columns=["symbol", "name", "industry", "close"])
         out, summary = run_value("2026-02-22", universe, _FakeValueProvider({}), ValueConfig(), logging.getLogger("test-value"))

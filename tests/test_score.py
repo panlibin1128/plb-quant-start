@@ -210,6 +210,31 @@ class ScoreSystemTests(unittest.TestCase):
         self.assertEqual(len(candidates), 1)
         self.assertIn("risk_reason", candidates.columns)
 
+    def test_run_score_top_n_is_unique_by_symbol(self) -> None:
+        universe = pd.DataFrame(
+            {
+                "symbol": ["000001", "000001", "000002", "000003"],
+                "name": ["A", "A", "B", "C"],
+                "industry": ["I1", "I2", "I1", "I2"],
+            }
+        )
+        provider = _FakeProvider(
+            stock_map={
+                "000001": _mk_hist(1),
+                "000002": _mk_hist(2),
+                "000003": _mk_hist(3),
+            },
+            benchmark=_mk_hist(99),
+        )
+        candidates, _ = run_score(
+            date="2026-02-22",
+            universe=universe,
+            data_provider=provider,
+            config=ScoreConfig(top_n_output=3),
+            logger=logging.getLogger("test-score"),
+        )
+        self.assertEqual(candidates["symbol"].astype(str).nunique(), len(candidates))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -309,6 +309,8 @@ def run_value(
     )
 
     filtered = filtered.sort_values("value_score_total", ascending=False).reset_index(drop=True)
+    if "symbol" in filtered.columns:
+        filtered = filtered.drop_duplicates(subset=["symbol"], keep="first").reset_index(drop=True)
     top_n = int(config.top_n_output)
     out_df = filtered.head(top_n).copy()
     out_df = out_df.reindex(columns=value_output_columns())

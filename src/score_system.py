@@ -418,6 +418,8 @@ def run_score(
 
     scored = pd.DataFrame(rows)
     scored = scored.sort_values(["score_total", "score_strength", "score_trend"], ascending=[False, False, False]).reset_index(drop=True)
+    if "symbol" in scored.columns:
+        scored = scored.drop_duplicates(subset=["symbol"], keep="first").reset_index(drop=True)
     top_n = int(config.top_n_output)
     out_df = scored.head(top_n).copy()
 

@@ -82,6 +82,35 @@ def _ret_n(close: pd.Series, n: int) -> float:
     return float(c.iloc[-1] / c.iloc[-(n + 1)] - 1)
 
 
+def _dedupe_universe_by_symbol(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty or "symbol" not in df.columns:
+        return df
+    out = df.copy()
+    out["symbol"] = out["symbol"].astype(str)
+
+    industry_tags_map: dict[str, str] = {}
+    if "industry" in out.columns:
+        tags = (
+            out[["symbol", "industry"]]
+            .dropna(subset=["industry"])
+            .groupby("symbol")["industry"]
+            .apply(lambda s: "|".join(sorted(set(s.astype(str)))))
+        )
+        industry_tags_map = tags.to_dict()
+
+    sort_cols: list[str] = []
+    for col in ["turnover", "total_mv", "close"]:
+        if col in out.columns:
+            sort_cols.append(col)
+    if sort_cols:
+        out = out.sort_values(sort_cols, ascending=[False] * len(sort_cols))
+    out = out.drop_duplicates(subset=["symbol"], keep="first")
+
+    if industry_tags_map:
+        out["industry_tags"] = out["symbol"].map(industry_tags_map).fillna("")
+    return out
+
+
 def run_self_check(fetch_cfg: FetchConfig, logger: logging.Logger) -> int:
     logger.info("running self-check: fetch HS300 and compute MAs")
     hs300 = fetch_hs300_daily(fetch_cfg, logger)
@@ -102,6 +131,7 @@ def _write_trend_outputs(result_df: pd.DataFrame, summary_obj: Dict[str, object]
     out_df = result_df
     if not out_df.empty and "final_signal" in out_df.columns:
         out_df = out_df[out_df["final_signal"].astype(bool)].copy()
+    out_df = _dedupe_universe_by_symbol(out_df)
     out_df.to_csv(out_csv, index=False, encoding="utf-8-sig")
     out_json.write_text(json.dumps(summary_obj, ensure_ascii=False, indent=2), encoding="utf-8")
     logger.info("trend done: %s | %s", out_csv, out_json)
@@ -113,6 +143,7 @@ def _write_reversal_outputs(result_df: pd.DataFrame, summary_obj: Dict[str, obje
     out_df = result_df
     if not out_df.empty and "reversal_signal" in out_df.columns:
         out_df = out_df[out_df["reversal_signal"].astype(bool)].copy()
+    out_df = _dedupe_universe_by_symbol(out_df)
     out_df.to_csv(out_csv, index=False, encoding="utf-8-sig")
     out_json.write_text(json.dumps(summary_obj, ensure_ascii=False, indent=2), encoding="utf-8")
     logger.info("reversal done: %s | %s", out_csv, out_json)
@@ -124,6 +155,7 @@ def _write_score_outputs(result_df: pd.DataFrame, summary_obj: Dict[str, object]
     out_df = result_df
     if out_df.empty and len(out_df.columns) == 0:
         out_df = pd.DataFrame(columns=score_output_columns())
+    out_df = _dedupe_universe_by_symbol(out_df)
     out_df.to_csv(out_csv, index=False, encoding="utf-8-sig")
     out_json.write_text(json.dumps(summary_obj, ensure_ascii=False, indent=2), encoding="utf-8")
     logger.info("score done: %s | %s", out_csv, out_json)
@@ -135,6 +167,7 @@ def _write_value_outputs(result_df: pd.DataFrame, summary_obj: Dict[str, object]
     out_df = result_df
     if out_df.empty and len(out_df.columns) == 0:
         out_df = pd.DataFrame(columns=value_output_columns())
+    out_df = _dedupe_universe_by_symbol(out_df)
     out_df.to_csv(out_csv, index=False, encoding="utf-8-sig")
     out_json.write_text(json.dumps(summary_obj, ensure_ascii=False, indent=2), encoding="utf-8")
     logger.info("value done: %s | %s", out_csv, out_json)
@@ -585,6 +618,8 @@ def main() -> int:
         else:
             rev_base = top3_for_reversal.copy()
 
+        rev_base = _dedupe_universe_by_symbol(rev_base)
+
         rev_symbols = rev_base["symbol"].dropna().astype(str).tolist()
         missing = [s for s in rev_symbols if s not in stock_hist]
         for symbol in tqdm(missing, desc="download reversal missing", unit="stock"):
@@ -620,7 +655,8 @@ def main() -> int:
             rev_rps_df["rps50"] = rps50.rps50.values
             summary["reversal_rps_mode"] = "fast_proxy"
 
-        rev_base = rev_base.merge(rev_rps_df, on="symbol", how="left")
+        rev_rps_df = rev_rps_df.drop_duplicates(subset=["symbol"], keep="first")
+        rev_base = rev_base.merge(rev_rps_df, on="symbol", how="left", validate="one_to_one")
         params_cfg = cfg.get("reversal_params", {})
         params = ReversalParams(
             rps50_threshold=float(params_cfg.get("rps50_threshold", 85)),
@@ -691,14 +727,30 @@ def main() -> int:
         return 0
 
     trend_signal_count = int(trend_result["final_signal"].sum()) if (not trend_result.empty and "final_signal" in trend_result.columns) else 0
+    trend_unique_total = int(trend_result["symbol"].astype(str).nunique()) if (not trend_result.empty and "symbol" in trend_result.columns) else 0
+    trend_unique_pos = (
+        int(trend_result.loc[trend_result["final_signal"].astype(bool), "symbol"].astype(str).nunique())
+        if (not trend_result.empty and "symbol" in trend_result.columns and "final_signal" in trend_result.columns)
+        else 0
+    )
+    trend_summary["final_signals_raw"] = int(trend_signal_count)
+    trend_summary["final_signals"] = int(trend_unique_pos)
     trend_summary["signal_label_counts"] = {
-        "NONE": int(max(len(trend_result) - trend_signal_count, 0)),
-        "TREND_ONLY": int(trend_signal_count),
+        "NONE": int(max(trend_unique_total - trend_unique_pos, 0)),
+        "TREND_ONLY": int(trend_unique_pos),
     }
     reversal_signal_count = int(reversal_result["reversal_signal"].sum()) if (not reversal_result.empty and "reversal_signal" in reversal_result.columns) else 0
+    reversal_unique_total = int(reversal_result["symbol"].astype(str).nunique()) if (not reversal_result.empty and "symbol" in reversal_result.columns) else 0
+    reversal_unique_pos = (
+        int(reversal_result.loc[reversal_result["reversal_signal"].astype(bool), "symbol"].astype(str).nunique())
+        if (not reversal_result.empty and "symbol" in reversal_result.columns and "reversal_signal" in reversal_result.columns)
+        else 0
+    )
+    reversal_summary["reversal_signals_raw"] = int(reversal_signal_count)
+    reversal_summary["reversal_signals"] = int(reversal_unique_pos)
     reversal_summary["signal_label_counts"] = {
-        "NONE": int(max(len(reversal_result) - reversal_signal_count, 0)),
-        "REVERSAL_ONLY": int(reversal_signal_count),
+        "NONE": int(max(reversal_unique_total - reversal_unique_pos, 0)),
+        "REVERSAL_ONLY": int(reversal_unique_pos),
     }
 
     if args.system in {"trend", "both"}:

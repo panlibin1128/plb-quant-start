@@ -32,7 +32,7 @@ from .filters import (
     top_n_per_industry,
     trend_train_track_flags,
 )
-from .reversal_system import ReversalParams, evaluate_reversal_stock, signal_label
+from .reversal_system import ReversalParams, evaluate_reversal_stock
 from .score_system import DictDataProvider, ScoreConfig, run_score, score_output_columns
 from .value_system import AkValueDataProvider, ValueConfig, run_value, value_output_columns
 from .rps import (
@@ -96,12 +96,26 @@ def run_self_check(fetch_cfg: FetchConfig, logger: logging.Logger) -> int:
     return 0
 
 
-def _write_outputs(result_df: pd.DataFrame, summary_obj: Dict[str, object], output_dir: Path, run_date: str, logger: logging.Logger) -> None:
-    out_csv = output_dir / f"{run_date}_candidates.csv"
-    out_json = output_dir / f"{run_date}_summary.json"
-    result_df.to_csv(out_csv, index=False, encoding="utf-8-sig")
+def _write_trend_outputs(result_df: pd.DataFrame, summary_obj: Dict[str, object], output_dir: Path, run_date: str, logger: logging.Logger) -> None:
+    out_csv = output_dir / f"{run_date}_trend_candidates.csv"
+    out_json = output_dir / f"{run_date}_trend_summary.json"
+    out_df = result_df
+    if not out_df.empty and "final_signal" in out_df.columns:
+        out_df = out_df[out_df["final_signal"].astype(bool)].copy()
+    out_df.to_csv(out_csv, index=False, encoding="utf-8-sig")
     out_json.write_text(json.dumps(summary_obj, ensure_ascii=False, indent=2), encoding="utf-8")
-    logger.info("done: %s | %s", out_csv, out_json)
+    logger.info("trend done: %s | %s", out_csv, out_json)
+
+
+def _write_reversal_outputs(result_df: pd.DataFrame, summary_obj: Dict[str, object], output_dir: Path, run_date: str, logger: logging.Logger) -> None:
+    out_csv = output_dir / f"{run_date}_reversal_candidates.csv"
+    out_json = output_dir / f"{run_date}_reversal_summary.json"
+    out_df = result_df
+    if not out_df.empty and "reversal_signal" in out_df.columns:
+        out_df = out_df[out_df["reversal_signal"].astype(bool)].copy()
+    out_df.to_csv(out_csv, index=False, encoding="utf-8-sig")
+    out_json.write_text(json.dumps(summary_obj, ensure_ascii=False, indent=2), encoding="utf-8")
+    logger.info("reversal done: %s | %s", out_csv, out_json)
 
 
 def _write_score_outputs(result_df: pd.DataFrame, summary_obj: Dict[str, object], output_dir: Path, run_date: str, logger: logging.Logger) -> None:
@@ -247,6 +261,13 @@ def main() -> int:
         return run_self_check(fetch_cfg, logger)
 
     run_date = _norm_run_date(args.date)
+    legacy_candidates = output_dir / f"{run_date}_candidates.csv"
+    legacy_summary = output_dir / f"{run_date}_summary.json"
+    if legacy_candidates.exists():
+        legacy_candidates.unlink()
+    if legacy_summary.exists():
+        legacy_summary.unlink()
+
     trend_cfg = TrendConfig(
         hhv_ratio_threshold=float(cfg["trend"]["hhv_ratio_threshold"]),
         rps_sum_threshold=float(cfg["trend"]["rps_sum_threshold"]),
@@ -323,6 +344,18 @@ def main() -> int:
         "market_regime_pass": market_ok,
         "market_flags": market_flags,
     }
+    trend_summary: Dict[str, object] = {
+        "run_date": run_date,
+        "system_mode": args.system,
+        "market_regime_pass": market_ok,
+        "market_flags": market_flags,
+    }
+    reversal_summary: Dict[str, object] = {
+        "run_date": run_date,
+        "system_mode": args.system,
+        "market_regime_pass": market_ok,
+        "market_flags": market_flags,
+    }
 
     def _write_score_empty(message: str, universe_df: pd.DataFrame, stock_hist_for_score: Dict[str, pd.DataFrame] | None = None) -> None:
         provider = DictDataProvider(stock_hist=stock_hist_for_score or {}, benchmark_hist=hs300)
@@ -362,8 +395,10 @@ def main() -> int:
 
     if not market_ok:
         summary["message"] = "market regime filter failed, no candidates"
-        if args.system in {"trend", "reversal", "both"}:
-            _write_outputs(pd.DataFrame(), summary, output_dir, run_date, logger)
+        if args.system in {"trend", "both"}:
+            _write_trend_outputs(pd.DataFrame(), summary, output_dir, run_date, logger)
+        if args.system in {"reversal", "both"}:
+            _write_reversal_outputs(pd.DataFrame(), summary, output_dir, run_date, logger)
         if args.system in {"score", "both"}:
             _write_score_empty("market regime filter failed, no candidates", pd.DataFrame())
         if args.system in {"value", "both"}:
@@ -383,6 +418,8 @@ def main() -> int:
         spot = spot.drop(columns=["industry"]).merge(user_map, on="symbol", how="left")
 
     summary["spot_count"] = int(len(spot))
+    trend_summary["spot_count"] = int(len(spot))
+    reversal_summary["spot_count"] = int(len(spot))
     score_summary["spot_count"] = int(len(spot))
     value_summary["spot_count"] = int(len(spot))
 
@@ -390,12 +427,16 @@ def main() -> int:
     top_n = int(cfg["run"]["top_n_per_industry"])
     top3 = top_n_per_industry(spot, top_n, min_turnover)
     summary["after_top_n"] = int(len(top3))
+    trend_summary["after_top_n"] = int(len(top3))
+    reversal_summary["after_top_n"] = int(len(top3))
     score_summary["input_universe_count"] = int(len(top3))
     value_summary["input_universe_count"] = int(len(top3))
     if top3.empty:
         summary["message"] = "no symbols left after top-n industry filter"
-        if args.system in {"trend", "reversal", "both"}:
-            _write_outputs(pd.DataFrame(), summary, output_dir, run_date, logger)
+        if args.system in {"trend", "both"}:
+            _write_trend_outputs(pd.DataFrame(), summary, output_dir, run_date, logger)
+        if args.system in {"reversal", "both"}:
+            _write_reversal_outputs(pd.DataFrame(), summary, output_dir, run_date, logger)
         if args.system in {"score", "both"}:
             _write_score_empty("no symbols left after top-n industry filter", top3)
         if args.system in {"value", "both"}:
@@ -413,12 +454,16 @@ def main() -> int:
     avail_symbols = set(stock_hist.keys())
     top3 = top3[top3["symbol"].isin(avail_symbols)].copy()
     summary["after_history_available"] = int(len(top3))
+    trend_summary["after_history_available"] = int(len(top3))
+    reversal_summary["after_history_available"] = int(len(top3))
     score_summary["after_history_available"] = int(len(top3))
     value_summary["after_history_available"] = int(len(top3))
     if top3.empty:
         summary["message"] = "no symbols left after history fetch"
-        if args.system in {"trend", "reversal", "both"}:
-            _write_outputs(pd.DataFrame(), summary, output_dir, run_date, logger)
+        if args.system in {"trend", "both"}:
+            _write_trend_outputs(pd.DataFrame(), summary, output_dir, run_date, logger)
+        if args.system in {"reversal", "both"}:
+            _write_reversal_outputs(pd.DataFrame(), summary, output_dir, run_date, logger)
         if args.system in {"score", "both"}:
             _write_score_empty("no symbols left after history fetch", top3, stock_hist)
         if args.system in {"value", "both"}:
@@ -455,11 +500,14 @@ def main() -> int:
         strong_inds = set(ind_strength[ind_strength["industry_strength_pass"]]["industry"].tolist())
         top3 = top3[top3["industry"].isin(strong_inds)].copy()
         summary["after_industry_strength"] = int(len(top3))
+        trend_summary["after_industry_strength"] = int(len(top3))
         score_summary["after_industry_strength"] = int(len(top3))
         if top3.empty:
             summary["message"] = "no symbols left after industry strength filter"
-            if args.system in {"trend", "reversal", "both"}:
-                _write_outputs(pd.DataFrame(), summary, output_dir, run_date, logger)
+            if args.system in {"trend", "both"}:
+                _write_trend_outputs(pd.DataFrame(), summary, output_dir, run_date, logger)
+            if args.system in {"reversal", "both"}:
+                _write_reversal_outputs(pd.DataFrame(), summary, output_dir, run_date, logger)
             if args.system in {"score", "both"}:
                 _write_score_empty("no symbols left after industry strength filter", top3, stock_hist)
             if args.system in {"value", "both"}:
@@ -513,11 +561,15 @@ def main() -> int:
 
             trend_result = pd.DataFrame(result_rows)
             summary["final_signals"] = int(trend_result["final_signal"].sum()) if not trend_result.empty else 0
+            trend_summary["final_signals"] = summary["final_signals"]
         else:
             summary["final_signals"] = 0
+            trend_summary["final_signals"] = 0
     else:
         summary["after_industry_strength"] = 0
         summary["final_signals"] = 0
+        trend_summary["after_industry_strength"] = 0
+        trend_summary["final_signals"] = 0
 
     reversal_enabled = bool(cfg.get("enable_reversal_system", True)) and args.system in {"reversal", "both"}
     reversal_result = pd.DataFrame()
@@ -589,6 +641,8 @@ def main() -> int:
 
         reversal_result = pd.DataFrame(rev_rows)
         summary["reversal_signals"] = int(reversal_result["reversal_signal"].sum()) if not reversal_result.empty else 0
+        reversal_summary["reversal_signals"] = summary["reversal_signals"]
+        reversal_summary["reversal_rps_mode"] = summary.get("reversal_rps_mode", "fast_proxy")
 
         if not reversal_result.empty:
             sample_symbols = random.sample(reversal_result["symbol"].astype(str).unique().tolist(), k=min(3, reversal_result["symbol"].nunique()))
@@ -596,6 +650,7 @@ def main() -> int:
                 logger.info("reversal_sanity %s\n%s", symbol, debug_tails[symbol].to_string(index=False))
     else:
         summary["reversal_signals"] = 0
+        reversal_summary["reversal_signals"] = 0
 
     score_result = pd.DataFrame()
     if args.system in {"score", "both"}:
@@ -635,78 +690,21 @@ def main() -> int:
         _write_value_outputs(value_result, value_summary, output_dir, run_date, logger)
         return 0
 
-    if trend_result.empty and reversal_result.empty:
-        _write_outputs(pd.DataFrame(), summary, output_dir, run_date, logger)
-        if args.system == "both":
-            _write_score_outputs(score_result, score_summary, output_dir, run_date, logger)
-            _write_value_outputs(value_result, value_summary, output_dir, run_date, logger)
-        return 0
+    trend_signal_count = int(trend_result["final_signal"].sum()) if (not trend_result.empty and "final_signal" in trend_result.columns) else 0
+    trend_summary["signal_label_counts"] = {
+        "NONE": int(max(len(trend_result) - trend_signal_count, 0)),
+        "TREND_ONLY": int(trend_signal_count),
+    }
+    reversal_signal_count = int(reversal_result["reversal_signal"].sum()) if (not reversal_result.empty and "reversal_signal" in reversal_result.columns) else 0
+    reversal_summary["signal_label_counts"] = {
+        "NONE": int(max(len(reversal_result) - reversal_signal_count, 0)),
+        "REVERSAL_ONLY": int(reversal_signal_count),
+    }
 
-    if trend_result.empty:
-        result = reversal_result.copy()
-        result["trend_signal"] = False
-    elif reversal_result.empty:
-        result = trend_result.copy()
-        result["trend_signal"] = result["final_signal"].astype(bool)
-        result["reversal_signal"] = False
-        result["reversal_first_in_30d"] = False
-        result["reversal_rps50"] = 0.0
-        result["reversal_A__close_above_ma250"] = False
-        result["reversal_B__new_high_50d_in_30d"] = False
-        result["reversal_D__rps50_gt_85"] = False
-        result["reversal_AA__days_above_ma250_in_30d"] = 0
-        result["reversal_AB__high_near_120d_high"] = False
-        result["reversal_system_signal"] = False
-    else:
-        base = trend_result.copy()
-        base["trend_signal"] = base["final_signal"].astype(bool)
-        rev_cols = [
-            "symbol",
-            "reversal_signal",
-            "reversal_first_in_30d",
-            "reversal_rps50",
-            "reversal_A__close_above_ma250",
-            "reversal_B__new_high_50d_in_30d",
-            "reversal_D__rps50_gt_85",
-            "reversal_AA__days_above_ma250_in_30d",
-            "reversal_AB__high_near_120d_high",
-            "reversal_system_signal",
-        ]
-        rev_merge = reversal_result[rev_cols].copy()
-        rev_merge = rev_merge.sort_values(["symbol", "reversal_signal", "reversal_rps50"], ascending=[True, False, False])
-        rev_merge = rev_merge.drop_duplicates(subset=["symbol"], keep="first")
-        result = base.merge(rev_merge, on="symbol", how="left")
-        fill_map = {
-            "reversal_signal": False,
-            "reversal_first_in_30d": False,
-            "reversal_rps50": 0.0,
-            "reversal_A__close_above_ma250": False,
-            "reversal_B__new_high_50d_in_30d": False,
-            "reversal_D__rps50_gt_85": False,
-            "reversal_AA__days_above_ma250_in_30d": 0,
-            "reversal_AB__high_near_120d_high": False,
-            "reversal_system_signal": False,
-        }
-        for key, val in fill_map.items():
-            result[key] = result[key].fillna(val)
-
-    if "trend_signal" not in result.columns:
-        result["trend_signal"] = False
-    if "trend_system_signal" not in result.columns:
-        result["trend_system_signal"] = result["trend_signal"].astype(bool)
-    else:
-        result["trend_system_signal"] = result["trend_signal"].astype(bool)
-
-    result["signal_label"] = [
-        signal_label(bool(t), bool(r))
-        for t, r in zip(result["trend_signal"].astype(bool), result["reversal_signal"].astype(bool))
-    ]
-
-    label_counts = result["signal_label"].value_counts().to_dict()
-    summary["signal_label_counts"] = {str(k): int(v) for k, v in label_counts.items()}
-    logger.info("signal_label distribution: %s", summary["signal_label_counts"])
-
-    _write_outputs(result, summary, output_dir, run_date, logger)
+    if args.system in {"trend", "both"}:
+        _write_trend_outputs(trend_result, trend_summary, output_dir, run_date, logger)
+    if args.system in {"reversal", "both"}:
+        _write_reversal_outputs(reversal_result, reversal_summary, output_dir, run_date, logger)
     if args.system == "both":
         _write_score_outputs(score_result, score_summary, output_dir, run_date, logger)
         _write_value_outputs(value_result, value_summary, output_dir, run_date, logger)
